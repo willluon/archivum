@@ -4,9 +4,13 @@ A portfolio-scale **Enterprise Content Management (ECM) platform** — a documen
 repository with durable document identity, content-addressed storage, dynamic
 metadata schemas, versioning, audit, search, and asynchronous processing.
 
-**Status: V0 — foundation.** The repository kernel is not implemented yet. The
-architecture, decisions, and roadmap are documented in [`docs/`](docs/); code
-follows milestone by milestone.
+**Status: V0.1 — repository kernel.** Documents have permanent UUID identity
+that provably survives rename and move; bytes live in a content-addressed
+`ContentStore` behind blob-first write ordering; every mutation writes an
+append-only audit event in the same transaction. Exercised by an invariant
+test suite and the `archivum` CLI (`mkdir` / `ingest` / `ls` / `info` /
+`rename` / `mv` / `audit` / `verify`); `scripts/demo.sh` walks the whole
+kernel end to end in CI. Next: versioning (see [`docs/roadmap.md`](docs/roadmap.md)).
 
 ## What this is
 

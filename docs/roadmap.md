@@ -4,14 +4,14 @@ Each milestone stays runnable, introduces few concepts, ships tests, and has
 a concrete completion criterion. Versions are sequential but not sacred —
 ordering changes get recorded here with a reason.
 
-## V0 — Foundation *(current)*
+## V0 — Foundation *(done 2026-08-12)*
 
 Repo scaffold, Docker Compose Postgres, Alembic baseline, CI (lint, migrate
 up/down, tests), ADRs 0001–0005, this documentation set.
 **Done when:** CI is green — including `alembic upgrade head` against a real
 Postgres — on an empty-schema baseline.
 
-## V0.1 — Repository kernel
+## V0.1 — Repository kernel *(done 2026-08-12)*
 
 Tables: `principals`, `entries`, `documents`, `document_versions` (single
 version), `blobs`, `audit_events`. `ContentStore` interface + filesystem
