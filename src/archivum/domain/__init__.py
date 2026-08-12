@@ -46,6 +46,24 @@ class InvalidOperation(DomainError):
     pass
 
 
+class NotADocument(DomainError):
+    pass
+
+
+class VersionNotFound(DomainError):
+    pass
+
+
+class VersionConflict(DomainError):
+    """Optimistic-concurrency failure: the document's current version is no
+    longer the one the writer last saw (ADR-0007)."""
+
+    def __init__(self, expected: int, actual: int):
+        super().__init__(f"expected version {expected}, but current version is {actual}")
+        self.expected = expected
+        self.actual = actual
+
+
 def validate_title(title: str) -> str:
     if not title or not title.strip():
         raise InvalidTitle("title must not be empty")

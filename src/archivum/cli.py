@@ -61,8 +61,24 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("audit", help="show an entry's audit trail")
     p.add_argument("path")
 
-    p = sub.add_parser("verify", help="verify a document's content hash")
+    p = sub.add_parser("verify", help="verify every version's content hash")
     p.add_argument("path")
+
+    p = sub.add_parser("versions", help="list a document's version history")
+    p.add_argument("path")
+
+    p = sub.add_parser("version-add", help="add a new immutable version")
+    p.add_argument("path")
+    p.add_argument("file")
+    p.add_argument("--note", help="change note")
+    p.add_argument("--expect", type=int, help="expected current version (optimistic concurrency)")
+    p.add_argument("--mime", default="application/octet-stream")
+
+    p = sub.add_parser("restore", help="restore a historical version as a new version")
+    p.add_argument("path")
+    p.add_argument("version_number", type=int)
+    p.add_argument("--note", help="change note (default: 'restored from version N')")
+    p.add_argument("--expect", type=int, help="expected current version (optimistic concurrency)")
 
     args = parser.parse_args(argv)
 
@@ -118,11 +134,46 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
         elif args.command == "verify":
-            if svc.verify_document(svc.resolve_path(args.path)):
-                print("OK: stored content matches recorded sha256")
-            else:
-                print("FAILED: stored content does not match recorded sha256")
+            results = svc.verify_versions(svc.resolve_path(args.path))
+            for number, ok in sorted(results.items()):
+                print(f"v{number}: {'OK' if ok else 'FAILED'}")
+            if not all(results.values()):
                 return 2
+
+        elif args.command == "versions":
+            for v in svc.list_versions(svc.resolve_path(args.path)):
+                marker = "*" if v["is_current"] else "-"
+                print(
+                    f"{marker} v{v['version_number']} {v['created_at'].isoformat()} "
+                    f"{v['size_bytes']} {v['sha256'].hex()[:16]} {v['change_note'] or ''}"
+                )
+
+        elif args.command == "version-add":
+            file_path = Path(args.file)
+            with open(file_path, "rb") as f:
+                result = svc.create_version(
+                    actor,
+                    svc.resolve_path(args.path),
+                    f,
+                    mime_type=args.mime,
+                    original_filename=file_path.name,
+                    change_note=args.note,
+                    expected_version=args.expect,
+                )
+            print(f"created version {result['version_number']} ({result['version_id']})")
+
+        elif args.command == "restore":
+            result = svc.restore_version(
+                actor,
+                svc.resolve_path(args.path),
+                args.version_number,
+                change_note=args.note,
+                expected_version=args.expect,
+            )
+            print(
+                f"restored version {args.version_number} as version "
+                f"{result['version_number']} ({result['version_id']})"
+            )
 
     except DomainError as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -21,8 +21,11 @@ from archivum.domain import (
     CycleDetected,
     EntryNotFound,
     InvalidOperation,
+    NotADocument,
     NotAFolder,
     TitleConflict,
+    VersionConflict,
+    VersionNotFound,
     new_id,
     validate_title,
 )
@@ -100,6 +103,61 @@ class RepositoryService:
         if info["entry_type"] != "document":
             raise InvalidOperation("verify applies to documents")
         return self.store.verify(info["storage_key"], info["sha256"])
+
+    def list_versions(self, document_id: uuid.UUID) -> list[dict]:
+        with self.engine.connect() as conn:
+            self._require_document(conn, document_id)
+            current_id = conn.execute(
+                select(documents.c.current_version_id).where(
+                    documents.c.entry_id == document_id
+                )
+            ).scalar_one()
+            rows = conn.execute(
+                select(
+                    document_versions.c.id,
+                    document_versions.c.version_number,
+                    document_versions.c.created_at,
+                    document_versions.c.created_by,
+                    document_versions.c.mime_type,
+                    document_versions.c.change_note,
+                    blobs.c.sha256,
+                    blobs.c.size_bytes,
+                    blobs.c.storage_key,
+                )
+                .select_from(
+                    document_versions.join(blobs, document_versions.c.blob_id == blobs.c.id)
+                )
+                .where(document_versions.c.document_id == document_id)
+                .order_by(document_versions.c.version_number)
+            ).all()
+        return [
+            {
+                "version_id": r.id,
+                "version_number": r.version_number,
+                "created_at": r.created_at,
+                "created_by": r.created_by,
+                "mime_type": r.mime_type,
+                "change_note": r.change_note,
+                "sha256": r.sha256,
+                "size_bytes": r.size_bytes,
+                "storage_key": r.storage_key,
+                "is_current": r.id == current_id,
+            }
+            for r in rows
+        ]
+
+    def get_version(self, document_id: uuid.UUID, version_number: int) -> dict:
+        for version in self.list_versions(document_id):
+            if version["version_number"] == version_number:
+                return version
+        raise VersionNotFound(f"document {document_id} has no version {version_number}")
+
+    def verify_versions(self, document_id: uuid.UUID) -> dict[int, bool]:
+        """Verify every historical version's bytes against its recorded hash."""
+        return {
+            v["version_number"]: self.store.verify(v["storage_key"], v["sha256"])
+            for v in self.list_versions(document_id)
+        }
 
     # ── writes (one transaction each, audit in-transaction) ───────────────
 
@@ -226,7 +284,176 @@ class RepositoryService:
                 },
             )
 
+    def create_version(
+        self,
+        actor_id: uuid.UUID,
+        document_id: uuid.UUID,
+        source: BinaryIO,
+        *,
+        mime_type: str = "application/octet-stream",
+        original_filename: str | None = None,
+        change_note: str | None = None,
+        expected_version: int | None = None,
+    ) -> dict:
+        # Blob-first (ADR-0003), exactly as ingest: bytes are durable before
+        # any row references them; a later failure orphans at most a blob.
+        put = self.store.put(source)
+        with self.engine.begin() as conn:
+            current = self._locked_current_version(conn, document_id)
+            self._check_expected(current, expected_version)
+            blob_id = self._ensure_blob(conn, put)
+            details = {
+                "sha256": put.sha256.hex(),
+                "size_bytes": put.size_bytes,
+                "change_note": change_note,
+            }
+            if expected_version is not None:
+                details["expected_version"] = expected_version
+            return self._append_version(
+                conn,
+                actor_id,
+                document_id,
+                current,
+                blob_id=blob_id,
+                mime_type=mime_type,
+                original_filename=original_filename,
+                change_note=change_note,
+                action="DOCUMENT_VERSION_CREATED",
+                details=details,
+            )
+
+    def restore_version(
+        self,
+        actor_id: uuid.UUID,
+        document_id: uuid.UUID,
+        version_number: int,
+        *,
+        change_note: str | None = None,
+        expected_version: int | None = None,
+    ) -> dict:
+        """Restore historical content by appending a new version that
+        references the source version's blob (ADR-0007). Pure DB transaction:
+        the bytes already exist, so the ContentStore is never touched."""
+        with self.engine.begin() as conn:
+            current = self._locked_current_version(conn, document_id)
+            self._check_expected(current, expected_version)
+            source = conn.execute(
+                select(document_versions).where(
+                    document_versions.c.document_id == document_id,
+                    document_versions.c.version_number == version_number,
+                )
+            ).one_or_none()
+            if source is None:
+                raise VersionNotFound(
+                    f"document {document_id} has no version {version_number}"
+                )
+            sha256 = conn.execute(
+                select(blobs.c.sha256).where(blobs.c.id == source.blob_id)
+            ).scalar_one()
+            details = {
+                "restored_from_version_id": str(source.id),
+                "restored_from_version_number": version_number,
+                "sha256": sha256.hex(),
+            }
+            if expected_version is not None:
+                details["expected_version"] = expected_version
+            return self._append_version(
+                conn,
+                actor_id,
+                document_id,
+                current,
+                blob_id=source.blob_id,
+                mime_type=source.mime_type,
+                original_filename=source.original_filename,
+                change_note=change_note or f"restored from version {version_number}",
+                action="DOCUMENT_VERSION_RESTORED",
+                details=details,
+            )
+
     # ── internals ─────────────────────────────────────────────────────────
+
+    def _require_document(self, conn: Connection, document_id: uuid.UUID):
+        entry = self._active_entry(conn, document_id)
+        if entry.entry_type != "document":
+            raise NotADocument(f"{document_id} is not a document")
+        return entry
+
+    def _locked_current_version(self, conn: Connection, document_id: uuid.UUID):
+        """Lock the documents row (the serialization point for version-number
+        allocation AND the expected_version check) and return the current
+        version's (id, version_number)."""
+        self._require_document(conn, document_id)
+        conn.execute(
+            select(documents.c.entry_id)
+            .where(documents.c.entry_id == document_id)
+            .with_for_update()
+        )
+        return conn.execute(
+            select(document_versions.c.id, document_versions.c.version_number)
+            .select_from(
+                documents.join(
+                    document_versions,
+                    documents.c.current_version_id == document_versions.c.id,
+                )
+            )
+            .where(documents.c.entry_id == document_id)
+        ).one()
+
+    @staticmethod
+    def _check_expected(current, expected_version: int | None) -> None:
+        if expected_version is not None and expected_version != current.version_number:
+            raise VersionConflict(expected_version, current.version_number)
+
+    def _append_version(
+        self,
+        conn: Connection,
+        actor_id: uuid.UUID,
+        document_id: uuid.UUID,
+        current,
+        *,
+        blob_id: uuid.UUID,
+        mime_type: str,
+        original_filename: str | None,
+        change_note: str | None,
+        action: str,
+        details: dict,
+    ) -> dict:
+        """Append version current+1 and advance the pointer. Caller must hold
+        the documents row lock. current = max (ADR-0007) makes current+1 the
+        next number; UNIQUE (document_id, version_number) is the backstop."""
+        next_number = current.version_number + 1
+        version_id = new_id()
+        conn.execute(
+            document_versions.insert().values(
+                id=version_id,
+                document_id=document_id,
+                version_number=next_number,
+                blob_id=blob_id,
+                mime_type=mime_type,
+                original_filename=original_filename,
+                change_note=change_note,
+                created_by=actor_id,
+            )
+        )
+        conn.execute(
+            update(documents)
+            .where(documents.c.entry_id == document_id)
+            .values(current_version_id=version_id)
+        )
+        record_event(
+            conn,
+            actor_id=actor_id,
+            action=action,
+            target_id=document_id,
+            details={
+                "version_id": str(version_id),
+                "version_number": next_number,
+                "previous_version_id": str(current.id),
+                "previous_version_number": current.version_number,
+                **details,
+            },
+        )
+        return {"version_id": version_id, "version_number": next_number}
 
     def _active_entry(self, conn: Connection, entry_id: uuid.UUID, for_update: bool = False):
         stmt = select(
