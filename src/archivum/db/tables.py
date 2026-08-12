@@ -145,7 +145,14 @@ document_versions = Table(
     UniqueConstraint("id", "document_id"),
 )
 
-AUDIT_ACTIONS = ("FOLDER_CREATED", "DOCUMENT_CREATED", "ENTRY_RENAMED", "ENTRY_MOVED")
+AUDIT_ACTIONS = (
+    "FOLDER_CREATED",
+    "DOCUMENT_CREATED",
+    "ENTRY_RENAMED",
+    "ENTRY_MOVED",
+    "DOCUMENT_VERSION_CREATED",
+    "DOCUMENT_VERSION_RESTORED",
+)
 
 audit_events = Table(
     "audit_events",
@@ -165,7 +172,8 @@ audit_events = Table(
     Column("target_id", UUID(as_uuid=True), nullable=False),
     Column("details", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     CheckConstraint(
-        "action IN ('FOLDER_CREATED','DOCUMENT_CREATED','ENTRY_RENAMED','ENTRY_MOVED')",
+        "action IN ('FOLDER_CREATED','DOCUMENT_CREATED','ENTRY_RENAMED','ENTRY_MOVED',"
+        "'DOCUMENT_VERSION_CREATED','DOCUMENT_VERSION_RESTORED')",
         name="action_valid",
     ),
     CheckConstraint("target_type IN ('entry')", name="target_type_valid"),
