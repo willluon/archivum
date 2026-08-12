@@ -51,12 +51,21 @@ deferred to the processing milestone.)
 zero code changes between them — values type-check at service and DB
 layers, and machine provenance survives verification.
 
-## V0.4 — API
+## V0.4 — API *(done 2026-08-12)*
 
-FastAPI over the services; the permanent contract. ETags from version
-numbers; no storage paths or internal IDs beyond the public UUIDs leak.
-**Done when:** every kernel operation is exercised through HTTP in tests;
-the CLI is reimplemented as an API client.
+FastAPI over the services under `/api/v1` — the permanent contract
+(ADR-0010). Aggregate `entries.revision` backs ETags (`If-Match` required
+on mutations of existing resources; 428 missing, 412 stale, checked and
+incremented in one atomic statement inside the mutating transaction);
+metadata concurrency is whole-document, resolving the V0.3 last-write-wins
+weakness. RFC 9457 problem+json with stable codes; typed folder/document
+resources; multipart streaming ingest; downloads with sha256 content
+ETags; `X-Archivum-Actor` dev attribution (not authentication). The CLI is
+a pure HTTP client and the demo runs against a live server. Migration
+0005 also hardened field structural immutability with a database trigger.
+**Done when:** every operation works through HTTP in tests, stale writes
+provably mutate nothing, no storage internals leak, and the demo drives
+the live server end to end.
 
 ## V0.5 — Asynchronous processing
 

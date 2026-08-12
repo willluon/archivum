@@ -65,6 +65,14 @@ PostgreSQL serves relational state, full-text search, and the job queue
 (ADR-0002). Blob bytes live behind `ContentStore`; the database stores
 content references and hashes, never physical paths in API responses.
 
+The API (`/api/v1`, ADR-0010) is the permanent external contract: typed
+folder/document resources, aggregate-revision ETags with mandatory
+`If-Match` on mutations (412 stale / 428 missing), RFC 9457 problem+json
+errors, streaming multipart ingest and sha256-ETagged downloads. Two
+counters coexist by design: `DocumentVersion.version_number` is content
+history; `entries.revision` is representation state for concurrency. The
+CLI is a pure HTTP client of this contract.
+
 ## Domain model (first iteration)
 
 - **Principal** — actor identity (user | service | system). Minimal from

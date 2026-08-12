@@ -7,6 +7,18 @@ WORK=$(mktemp -d)
 printf 'SYNTHETIC DEMO PERMIT - fictional municipality of Exempla\n' > "$WORK/permit.pdf"
 ROOT="demo-$(date +%s)"
 
+# V0.4: the CLI is a pure HTTP client — start the real ASGI server first
+export ARCHIVUM_API_URL="http://127.0.0.1:8765"
+archivum serve --port 8765 &
+SERVER_PID=$!
+trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+for _ in $(seq 1 50); do
+    curl -fsS "$ARCHIVUM_API_URL/healthz" >/dev/null 2>&1 && break
+    sleep 0.2
+done
+curl -fsS "$ARCHIVUM_API_URL/healthz" >/dev/null || { echo "FAIL: API did not start"; exit 1; }
+echo "archivum API up at $ARCHIVUM_API_URL — every command below travels over HTTP"
+
 archivum mkdir "/$ROOT"
 archivum mkdir "/$ROOT/Inbox"
 archivum mkdir "/$ROOT/Building"
@@ -131,5 +143,39 @@ archivum metadata show "/$ROOT/permit-meta.pdf" | grep '^estimated_cost' | grep 
 N_SET_AFTER=$(archivum audit "/$ROOT/permit-meta.pdf" | grep -c METADATA_VALUE_SET || true)
 [ "$N_SET_BEFORE" = "$N_SET_AFTER" ] || { echo "FAIL: rejected write produced an audit event"; exit 1; }
 echo "invalid write rejected: no mutation, no audit event"
+
+echo "=== V0.4: HTTP contract (ADR-0010) ==="
+DOC_URL="$ARCHIVUM_API_URL/api/v1/documents"
+DOC_ID=$(archivum info "/$ROOT/Building/Permits/BP-2026-1842.pdf" | awk '/^id:/{print $2}')
+
+ETAG=$(curl -fsS -D - -o /dev/null "$DOC_URL/$DOC_ID" | awk -F': ' 'tolower($1)=="etag"{print $2}' | tr -d '\r')
+echo "document ETag: $ETAG"
+[ -n "$ETAG" ] || { echo "FAIL: no ETag on GET"; exit 1; }
+
+# stale precondition must 412 as problem+json and mutate nothing
+CODE=$(curl -s -o "$WORK/stale.json" -w '%{http_code}' -X PATCH "$DOC_URL/$DOC_ID" \
+    -H 'Content-Type: application/json' -H 'If-Match: "999999"' \
+    -H "X-Archivum-Actor: ci-demo" -d '{"title":"should-not-happen.pdf"}')
+[ "$CODE" = "412" ] || { echo "FAIL: stale write returned $CODE, expected 412"; exit 1; }
+grep -q 'revision_conflict' "$WORK/stale.json" || { echo "FAIL: no revision_conflict code"; exit 1; }
+
+# missing precondition must 428
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$DOC_URL/$DOC_ID" \
+    -H 'Content-Type: application/json' -H "X-Archivum-Actor: ci-demo" \
+    -d '{"title":"still-should-not-happen.pdf"}')
+[ "$CODE" = "428" ] || { echo "FAIL: missing If-Match returned $CODE, expected 428"; exit 1; }
+
+archivum info "/$ROOT/Building/Permits/BP-2026-1842.pdf" | grep -q 'BP-2026-1842.pdf' \
+    || { echo "FAIL: stale/unconditional writes mutated the document"; exit 1; }
+echo "stale write rejected (412 revision_conflict), missing If-Match rejected (428), no mutation"
+
+# content download: sha256 as strong ETag, bytes intact, no internals anywhere
+curl -fsS "$DOC_URL/$DOC_ID/content" -o "$WORK/roundtrip.pdf"
+grep -q 'SYNTHETIC DEMO PERMIT' "$WORK/roundtrip.pdf" || { echo "FAIL: content roundtrip"; exit 1; }
+if curl -fsS "$DOC_URL/$DOC_ID" | grep -q 'storage_key'; then
+    echo "FAIL: storage_key leaked"
+    exit 1
+fi
+echo "content round-trips over HTTP; no storage internals exposed"
 
 echo "demo OK"

@@ -4,20 +4,20 @@ A portfolio-scale **Enterprise Content Management (ECM) platform** — a documen
 repository with durable document identity, content-addressed storage, dynamic
 metadata schemas, versioning, audit, search, and asynchronous processing.
 
-**Status: V0.3 — metadata schemas.** Documents have permanent UUID identity
-surviving rename, move, and versioning; bytes live in a content-addressed
-`ContentStore`; version history is append-only with restore-as-new-version
-(ADR-0007) and optimistic concurrency. Document types ("Building Permit",
-"Invoice") are now **data, not code**: typed-EAV metadata with per-value
-provenance, confidence that survives human verification, and a schema
-lifecycle that freezes structure once published (ADR-0008/0009) — with
-cross-schema writes and type mismatches rejected by PostgreSQL itself.
-Every mutation still writes an append-only audit event in the same
-transaction (metadata audit carries field identity, never values).
-CLI: `mkdir` / `ingest` / `ls` / `info` / `rename` / `mv` / `versions` /
-`version-add` / `restore` / `schema …` / `metadata …` / `audit` /
-`verify`; `scripts/demo.sh` walks the whole lifecycle in CI. Next: the API
-milestone (see [`docs/roadmap.md`](docs/roadmap.md)).
+**Status: V0.4 — HTTP API.** Archivum now has its permanent external
+contract: a FastAPI service under `/api/v1` (ADR-0010) over the proven
+repository — permanent UUID identity, content-addressed blobs, append-only
+version history with restore-as-new-version, and generic typed-EAV
+metadata with provenance that survives human verification. Every mutation
+of an existing resource requires `If-Match` against an aggregate-revision
+ETag (428 when missing, 412 when stale — checked and incremented in one
+atomic statement), which also closed V0.3's metadata last-write-wins
+weakness. Errors are RFC 9457 `application/problem+json` with stable
+codes; downloads stream with the content SHA-256 as their ETag; storage
+internals never serialize. The CLI is a pure HTTP client (`archivum serve`
+runs the server); `scripts/demo.sh` drives a live server end to end in CI.
+Interactive docs at `/docs` when serving. Next: asynchronous processing
+(see [`docs/roadmap.md`](docs/roadmap.md)).
 
 ## What this is
 
