@@ -4,17 +4,20 @@ A portfolio-scale **Enterprise Content Management (ECM) platform** — a documen
 repository with durable document identity, content-addressed storage, dynamic
 metadata schemas, versioning, audit, search, and asynchronous processing.
 
-**Status: V0.2 — versioning.** Documents have permanent UUID identity that
-provably survives rename, move, and any number of new versions; bytes live
-in a content-addressed `ContentStore` behind blob-first write ordering;
-every mutation writes an append-only audit event in the same transaction.
-Version history is append-only — restore creates a new version referencing
-the historical blob (ADR-0007) — with optimistic concurrency via
-`expected_version`. Exercised by an invariant test suite and the `archivum`
-CLI (`mkdir` / `ingest` / `ls` / `info` / `rename` / `mv` / `versions` /
-`version-add` / `restore` / `audit` / `verify`); `scripts/demo.sh` walks
-the whole lifecycle in CI. Next: metadata schemas (see
-[`docs/roadmap.md`](docs/roadmap.md)).
+**Status: V0.3 — metadata schemas.** Documents have permanent UUID identity
+surviving rename, move, and versioning; bytes live in a content-addressed
+`ContentStore`; version history is append-only with restore-as-new-version
+(ADR-0007) and optimistic concurrency. Document types ("Building Permit",
+"Invoice") are now **data, not code**: typed-EAV metadata with per-value
+provenance, confidence that survives human verification, and a schema
+lifecycle that freezes structure once published (ADR-0008/0009) — with
+cross-schema writes and type mismatches rejected by PostgreSQL itself.
+Every mutation still writes an append-only audit event in the same
+transaction (metadata audit carries field identity, never values).
+CLI: `mkdir` / `ingest` / `ls` / `info` / `rename` / `mv` / `versions` /
+`version-add` / `restore` / `schema …` / `metadata …` / `audit` /
+`verify`; `scripts/demo.sh` walks the whole lifecycle in CI. Next: the API
+milestone (see [`docs/roadmap.md`](docs/roadmap.md)).
 
 ## What this is
 

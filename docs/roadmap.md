@@ -35,16 +35,21 @@ the API milestone). Version deletion deferred to V0.9.
 listable; hash verification works per version; racing writers from the same
 expected version yield one success and one conflict.
 
-## V0.3 — Metadata schemas
+## V0.3 — Metadata schemas *(done 2026-08-12)*
 
-`MetadataSchema` / `MetadataFieldDefinition` / `MetadataValue` with type
-validation and per-value provenance + confidence (the predecessor's
-source-rank lesson, generalized). Field definitions carry an inert
-`extraction_hint` for the future intelligence layer.
-**Done when:** "Building Permit" and "Invoice" document types are both
-defined as data — zero code changes between them — and values type-check.
-Open questions to resolve here: value storage (typed EAV vs JSONB), schema
-versioning semantics.
+Typed-EAV metadata (ADR-0008): one row per (document, field) with per-type
+columns, per-value provenance (manual/extracted/imported/system), 0–1
+confidence that survives human verification, and verification state.
+Schema lifecycle draft → active → retired with structural immutability
+after publication (ADR-0009); zero-or-one schema per document; required
+means completeness, not existence. Three composite FKs make cross-schema
+writes, type mismatches, and schema-replacement-with-values impossible in
+PostgreSQL. Metadata changes do not create document versions; audit
+carries field identity but never values. (`extraction_hint` deliberately
+deferred to the processing milestone.)
+**Done when:** "Building Permit" and "Invoice" are both defined as data —
+zero code changes between them — values type-check at service and DB
+layers, and machine provenance survives verification.
 
 ## V0.4 — API
 

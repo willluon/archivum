@@ -82,11 +82,20 @@ content references and hashes, never physical paths in API responses.
 - **Blob** — content identity: SHA-256 (unique), size, storage key. Two
   documents may share one blob.
 - **MetadataSchema / MetadataFieldDefinition** — document types as data,
-  not code; fields carry type, requiredness, choices, and an extraction
-  hint (inert until the intelligence layer).
-- **MetadataValue** — typed value + **provenance** (manual | extracted |
-  validated | imported), confidence, source detail. Extraction output is a
-  suggestion; human verification is the canonicalization boundary.
+  not code, with a one-way lifecycle: draft (editable, unassignable) →
+  active (assignable, structurally frozen) → retired (ADR-0009). Fields
+  have an immutable `key` (identity) and a mutable `label` (display);
+  types: text, integer, decimal, boolean, date, datetime. `required`
+  means metadata *completeness*, never document existence. (An
+  `extraction_hint` column arrives with the processing milestone, not
+  before.)
+- **MetadataValue** — typed-EAV row per (document, field) (ADR-0008):
+  typed value + **origin** (manual | extracted | imported | system),
+  source detail, 0–1 confidence, and verification state
+  (`verified_by`/`verified_at`). Manual values are born verified; machine
+  values are suggestions until a human confirms; confidence survives
+  verification. Metadata changes never create document versions, and
+  audit events carry field identity but never values.
 - **AuditEvent** — append-only, in-transaction (ADR-0004).
 - **ProcessingJob** — queued | running | succeeded | failed | dead, with
   attempts, backoff, idempotency key.

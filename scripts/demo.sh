@@ -75,4 +75,61 @@ N_RESTORED=$(archivum audit "/$ROOT/contract.pdf" | grep -c DOCUMENT_VERSION_RES
 [ "$N_CREATED" = "2" ] || { echo "FAIL: expected 2 DOCUMENT_VERSION_CREATED, got $N_CREATED"; exit 1; }
 [ "$N_RESTORED" = "1" ] || { echo "FAIL: expected 1 DOCUMENT_VERSION_RESTORED, got $N_RESTORED"; exit 1; }
 
+echo "=== V0.3: generic metadata schemas (ADR-0008/0009) ==="
+archivum schema create "Building Permit" --description "Synthetic demo schema"
+archivum schema field-add "Building Permit" permit_number text --label "Permit Number" --required
+archivum schema field-add "Building Permit" property_address text --label "Property Address"
+archivum schema field-add "Building Permit" issue_date date --label "Issue Date"
+archivum schema field-add "Building Permit" estimated_cost decimal --label "Estimated Cost"
+archivum schema publish "Building Permit"
+
+archivum schema create "Invoice"
+archivum schema field-add "Invoice" invoice_number text --required
+archivum schema field-add "Invoice" vendor text
+archivum schema field-add "Invoice" amount decimal
+archivum schema field-add "Invoice" due_date date
+archivum schema publish "Invoice"
+archivum schema show "Building Permit"
+archivum schema show "Invoice"
+
+printf 'SYNTHETIC PERMIT DOCUMENT - fictional municipality of Exempla\n' > "$WORK/permit-meta.pdf"
+archivum ingest "$WORK/permit-meta.pdf" "/$ROOT" --mime application/pdf
+archivum metadata assign "/$ROOT/permit-meta.pdf" "Building Permit"
+archivum metadata set "/$ROOT/permit-meta.pdf" permit_number "DEMO-2026-001"
+archivum metadata set "/$ROOT/permit-meta.pdf" property_address "10 Example Street" \
+    --origin extracted --source demo/extractor --confidence 0.91
+archivum metadata set "/$ROOT/permit-meta.pdf" issue_date 2026-08-12
+archivum metadata set "/$ROOT/permit-meta.pdf" estimated_cost 25000.00
+archivum metadata verify "/$ROOT/permit-meta.pdf" property_address
+
+echo "--- permit metadata ---"
+archivum metadata show "/$ROOT/permit-meta.pdf"
+ADDR_LINE=$(archivum metadata show "/$ROOT/permit-meta.pdf" | grep '^property_address')
+echo "$ADDR_LINE" | grep -q 'origin=extracted' || { echo "FAIL: origin lost after verify"; exit 1; }
+echo "$ADDR_LINE" | grep -q 'confidence=0.91' || { echo "FAIL: confidence lost after verify"; exit 1; }
+echo "$ADDR_LINE" | grep -q 'verified=yes' || { echo "FAIL: verification missing"; exit 1; }
+echo "machine provenance survived human verification"
+
+printf 'SYNTHETIC INVOICE DOCUMENT - fictional vendor\n' > "$WORK/invoice.pdf"
+archivum ingest "$WORK/invoice.pdf" "/$ROOT" --mime application/pdf
+archivum metadata assign "/$ROOT/invoice.pdf" "Invoice"
+archivum metadata set "/$ROOT/invoice.pdf" invoice_number "INV-0042"
+archivum metadata set "/$ROOT/invoice.pdf" vendor "Exempla Office Supply Co"
+archivum metadata set "/$ROOT/invoice.pdf" amount 199.99
+archivum metadata set "/$ROOT/invoice.pdf" due_date 2026-09-01
+echo "--- invoice metadata (same engine, different schema) ---"
+archivum metadata show "/$ROOT/invoice.pdf"
+
+# invalid typed write must be rejected with no mutation and no audit event
+N_SET_BEFORE=$(archivum audit "/$ROOT/permit-meta.pdf" | grep -c METADATA_VALUE_SET || true)
+if archivum metadata set "/$ROOT/permit-meta.pdf" estimated_cost banana 2>/dev/null; then
+    echo "FAIL: 'banana' accepted for a decimal field"
+    exit 1
+fi
+archivum metadata show "/$ROOT/permit-meta.pdf" | grep '^estimated_cost' | grep -q '25000.00' \
+    || { echo "FAIL: estimated_cost mutated by rejected write"; exit 1; }
+N_SET_AFTER=$(archivum audit "/$ROOT/permit-meta.pdf" | grep -c METADATA_VALUE_SET || true)
+[ "$N_SET_BEFORE" = "$N_SET_AFTER" ] || { echo "FAIL: rejected write produced an audit event"; exit 1; }
+echo "invalid write rejected: no mutation, no audit event"
+
 echo "demo OK"

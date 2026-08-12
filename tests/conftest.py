@@ -4,6 +4,7 @@ from sqlalchemy import text
 from archivum.content import LocalFilesystemContentStore
 from archivum.db import create_db_engine
 from archivum.identity import ensure_user_principal
+from archivum.metadata import MetadataService
 from archivum.repository import RepositoryService
 
 
@@ -57,3 +58,8 @@ def svc(clean_db, store):
 @pytest.fixture
 def actor(clean_db):
     return ensure_user_principal(clean_db, "test-user")
+
+
+@pytest.fixture
+def msvc(clean_db):
+    return MetadataService(clean_db)
