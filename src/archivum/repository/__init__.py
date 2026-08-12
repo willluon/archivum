@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from archivum.audit import record_event, trail
 from archivum.content import ContentStore, PutResult
+from archivum.db.concurrency import bump_revision
 from archivum.db.tables import blobs, document_versions, documents, entries
 from archivum.domain import (
     CycleDetected,
@@ -159,6 +160,32 @@ class RepositoryService:
             for v in self.list_versions(document_id)
         }
 
+    def open_content(self, document_id: uuid.UUID, version_number: int | None = None) -> dict:
+        """Open a version's bytes for streaming. Returns the readable stream
+        plus the response metadata a client needs — never the storage key."""
+        info = self.get_entry(document_id)
+        if info["entry_type"] != "document":
+            raise EntryNotFound(str(document_id))
+        if version_number is None:
+            version = {
+                "version_number": info["version_number"],
+                "mime_type": info["mime_type"],
+                "sha256": info["sha256"],
+                "size_bytes": info["size_bytes"],
+                "storage_key": info["storage_key"],
+                "original_filename": info["original_filename"],
+            }
+        else:
+            version = self.get_version(document_id, version_number)
+        return {
+            "stream": self.store.open(version["storage_key"]),
+            "mime_type": version["mime_type"],
+            "size_bytes": version["size_bytes"],
+            "sha256": version["sha256"],
+            "filename": info["title"] if version_number is None
+            else (version["original_filename"] or info["title"]),
+        }
+
     # ── writes (one transaction each, audit in-transaction) ───────────────
 
     def create_folder(self, actor_id: uuid.UUID, parent_id: uuid.UUID, title: str) -> uuid.UUID:
@@ -228,14 +255,20 @@ class RepositoryService:
             )
         return document_id
 
-    def rename(self, actor_id: uuid.UUID, entry_id: uuid.UUID, new_title: str) -> None:
+    def rename(
+        self,
+        actor_id: uuid.UUID,
+        entry_id: uuid.UUID,
+        new_title: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> int:
         validate_title(new_title)
         with self.engine.begin() as conn:
-            entry = self._active_entry(conn, entry_id, for_update=True)
+            new_revision = bump_revision(conn, entry_id, expected_revision)
+            entry = self._active_entry(conn, entry_id)
             if entry.parent_id is None:
                 raise InvalidOperation("the root folder cannot be renamed")
-            if entry.title == new_title:
-                return
             self._require_title_free(conn, entry.parent_id, new_title, exclude=entry_id)
             self._try(
                 conn.execute,
@@ -250,10 +283,19 @@ class RepositoryService:
                 target_id=entry_id,
                 details={"old_title": entry.title, "new_title": new_title},
             )
+        return new_revision
 
-    def move(self, actor_id: uuid.UUID, entry_id: uuid.UUID, new_parent_id: uuid.UUID) -> None:
+    def move(
+        self,
+        actor_id: uuid.UUID,
+        entry_id: uuid.UUID,
+        new_parent_id: uuid.UUID,
+        *,
+        expected_revision: int | None = None,
+    ) -> int:
         with self.engine.begin() as conn:
-            entry = self._active_entry(conn, entry_id, for_update=True)
+            new_revision = bump_revision(conn, entry_id, expected_revision)
+            entry = self._active_entry(conn, entry_id)
             if entry.parent_id is None:
                 raise InvalidOperation("the root folder cannot be moved")
             self._require_folder(conn, new_parent_id, for_update=True)
@@ -283,6 +325,7 @@ class RepositoryService:
                     "new_parent_id": str(new_parent_id),
                 },
             )
+        return new_revision
 
     def create_version(
         self,
@@ -294,11 +337,13 @@ class RepositoryService:
         original_filename: str | None = None,
         change_note: str | None = None,
         expected_version: int | None = None,
+        expected_revision: int | None = None,
     ) -> dict:
         # Blob-first (ADR-0003), exactly as ingest: bytes are durable before
         # any row references them; a later failure orphans at most a blob.
         put = self.store.put(source)
         with self.engine.begin() as conn:
+            new_revision = bump_revision(conn, document_id, expected_revision)
             current = self._locked_current_version(conn, document_id)
             self._check_expected(current, expected_version)
             blob_id = self._ensure_blob(conn, put)
@@ -309,7 +354,7 @@ class RepositoryService:
             }
             if expected_version is not None:
                 details["expected_version"] = expected_version
-            return self._append_version(
+            result = self._append_version(
                 conn,
                 actor_id,
                 document_id,
@@ -321,6 +366,8 @@ class RepositoryService:
                 action="DOCUMENT_VERSION_CREATED",
                 details=details,
             )
+            result["revision"] = new_revision
+            return result
 
     def restore_version(
         self,
@@ -330,11 +377,13 @@ class RepositoryService:
         *,
         change_note: str | None = None,
         expected_version: int | None = None,
+        expected_revision: int | None = None,
     ) -> dict:
         """Restore historical content by appending a new version that
         references the source version's blob (ADR-0007). Pure DB transaction:
         the bytes already exist, so the ContentStore is never touched."""
         with self.engine.begin() as conn:
+            new_revision = bump_revision(conn, document_id, expected_revision)
             current = self._locked_current_version(conn, document_id)
             self._check_expected(current, expected_version)
             source = conn.execute(
@@ -357,7 +406,7 @@ class RepositoryService:
             }
             if expected_version is not None:
                 details["expected_version"] = expected_version
-            return self._append_version(
+            result = self._append_version(
                 conn,
                 actor_id,
                 document_id,
@@ -369,6 +418,8 @@ class RepositoryService:
                 action="DOCUMENT_VERSION_RESTORED",
                 details=details,
             )
+            result["revision"] = new_revision
+            return result
 
     # ── internals ─────────────────────────────────────────────────────────
 
@@ -462,6 +513,7 @@ class RepositoryService:
             entries.c.title,
             entries.c.parent_id,
             entries.c.state,
+            entries.c.revision,
             entries.c.created_at,
             entries.c.created_by,
         ).where(entries.c.id == entry_id, entries.c.state == "active")

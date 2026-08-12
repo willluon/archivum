@@ -17,6 +17,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.engine import Connection, Engine
 
 from archivum.audit import record_event
+from archivum.db.concurrency import bump_revision
 from archivum.db.tables import (
     FIELD_TYPES,
     VALUE_ORIGINS,
@@ -332,10 +333,31 @@ class MetadataService:
             ],
         }
 
+    def list_schemas(self) -> list[dict]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                select(
+                    metadata_schemas.c.id,
+                    metadata_schemas.c.name,
+                    metadata_schemas.c.description,
+                    metadata_schemas.c.state,
+                    metadata_schemas.c.created_at,
+                ).order_by(func.lower(metadata_schemas.c.name), metadata_schemas.c.created_at)
+            ).all()
+        return [dict(r._mapping) for r in rows]
+
     # ── document metadata ─────────────────────────────────────────────────
 
-    def assign_schema(self, actor_id: uuid.UUID, document_id: uuid.UUID, schema_ref) -> None:
+    def assign_schema(
+        self,
+        actor_id: uuid.UUID,
+        document_id: uuid.UUID,
+        schema_ref,
+        *,
+        expected_revision: int | None = None,
+    ) -> int:
         with self.engine.begin() as conn:
+            new_revision = bump_revision(conn, document_id, expected_revision)
             current_schema_id = self._locked_document_schema(conn, document_id)
             schema = self._schema(conn, schema_ref)
             if schema.state != "active":
@@ -343,9 +365,7 @@ class MetadataService:
                     f"schema {schema.name!r} is {schema.state}; only active schemas "
                     "can be assigned"
                 )
-            if current_schema_id == schema.id:
-                return
-            if current_schema_id is not None:
+            if current_schema_id is not None and current_schema_id != schema.id:
                 value_count = conn.execute(
                     select(func.count()).where(metadata_values.c.document_id == document_id)
                 ).scalar_one()
@@ -366,6 +386,7 @@ class MetadataService:
                 target_id=document_id,
                 details={"schema_id": str(schema.id), "schema_name": schema.name},
             )
+        return new_revision
 
     def set_metadata_value(
         self,
@@ -377,6 +398,7 @@ class MetadataService:
         origin: str = "manual",
         source: str | None = None,
         confidence=None,
+        expected_revision: int | None = None,
     ) -> dict:
         if origin not in VALUE_ORIGINS:
             raise InvalidMetadataValue(
@@ -384,6 +406,7 @@ class MetadataService:
             )
         confidence = self._parse_confidence(confidence)
         with self.engine.begin() as conn:
+            new_revision = bump_revision(conn, document_id, expected_revision)
             schema_id = self._locked_document_schema(conn, document_id)
             if schema_id is None:
                 raise MetadataNotAssigned(f"document {document_id} has no metadata schema")
@@ -452,12 +475,18 @@ class MetadataService:
                     "replaced": replaced,
                 },
             )
-        return {"value_id": value_id, "replaced": replaced}
+        return {"value_id": value_id, "replaced": replaced, "revision": new_revision}
 
     def verify_metadata_value(
-        self, actor_id: uuid.UUID, document_id: uuid.UUID, field_key: str
-    ) -> None:
+        self,
+        actor_id: uuid.UUID,
+        document_id: uuid.UUID,
+        field_key: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> int:
         with self.engine.begin() as conn:
+            new_revision = bump_revision(conn, document_id, expected_revision)
             schema_id = self._locked_document_schema(conn, document_id)
             if schema_id is None:
                 raise MetadataNotAssigned(f"document {document_id} has no metadata schema")
@@ -489,11 +518,18 @@ class MetadataService:
                     "confidence": float(row.confidence) if row.confidence is not None else None,
                 },
             )
+        return new_revision
 
     def delete_metadata_value(
-        self, actor_id: uuid.UUID, document_id: uuid.UUID, field_key: str
-    ) -> None:
+        self,
+        actor_id: uuid.UUID,
+        document_id: uuid.UUID,
+        field_key: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> int:
         with self.engine.begin() as conn:
+            new_revision = bump_revision(conn, document_id, expected_revision)
             schema_id = self._locked_document_schema(conn, document_id)
             if schema_id is None:
                 raise MetadataNotAssigned(f"document {document_id} has no metadata schema")
@@ -518,6 +554,7 @@ class MetadataService:
                     "field_key": field_key,
                 },
             )
+        return new_revision
 
     def get_metadata(self, document_id: uuid.UUID) -> dict:
         with self.engine.connect() as conn:

@@ -38,6 +38,9 @@ def clean_db(engine):
         conn.execute(text("DELETE FROM document_versions"))
         conn.execute(text("DELETE FROM documents"))
         conn.execute(text("DELETE FROM entries WHERE parent_id IS NOT NULL"))
+        # The structural-guard trigger blocks field deletion outside draft;
+        # reset schemas to draft (unique-name-safe via id-based rename) first
+        conn.execute(text("UPDATE metadata_schemas SET state = 'draft', name = id::text"))
         conn.execute(text("DELETE FROM metadata_fields"))
         conn.execute(text("DELETE FROM metadata_schemas"))
         conn.execute(text("DELETE FROM blobs"))

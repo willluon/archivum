@@ -101,6 +101,16 @@ class VersionConflict(DomainError):
         self.actual = actual
 
 
+class RevisionConflict(DomainError):
+    """Aggregate optimistic-concurrency failure: the entry's revision is no
+    longer the one the writer last saw (ADR-0010; maps to HTTP 412)."""
+
+    def __init__(self, expected: int | None, actual: int):
+        super().__init__(f"expected revision {expected}, but current revision is {actual}")
+        self.expected = expected
+        self.actual = actual
+
+
 def validate_title(title: str) -> str:
     if not title or not title.strip():
         raise InvalidTitle("title must not be empty")

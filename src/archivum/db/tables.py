@@ -67,6 +67,7 @@ entries = Table(
         nullable=True,
     ),
     Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("revision", BigInteger, nullable=False, server_default=text("1")),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False, server_default=func.now()),
     Column(
         "created_by",
@@ -76,6 +77,7 @@ entries = Table(
     ),
     Column("updated_at", TIMESTAMP(timezone=True), nullable=False, server_default=func.now()),
     CheckConstraint("entry_type IN ('folder','document')", name="entry_type_valid"),
+    CheckConstraint("revision >= 1", name="revision_positive"),
     CheckConstraint("title <> '' AND length(title) <= 255", name="title_valid"),
     CheckConstraint("state IN ('active','deleted')", name="state_valid"),
     UniqueConstraint("id", "entry_type"),
