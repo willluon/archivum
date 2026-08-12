@@ -32,10 +32,13 @@ def clean_db(engine):
     principal and root folder."""
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM audit_events"))
+        conn.execute(text("DELETE FROM metadata_values"))
         conn.execute(text("UPDATE documents SET current_version_id = NULL"))
         conn.execute(text("DELETE FROM document_versions"))
         conn.execute(text("DELETE FROM documents"))
         conn.execute(text("DELETE FROM entries WHERE parent_id IS NOT NULL"))
+        conn.execute(text("DELETE FROM metadata_fields"))
+        conn.execute(text("DELETE FROM metadata_schemas"))
         conn.execute(text("DELETE FROM blobs"))
         conn.execute(text("DELETE FROM principals WHERE principal_type <> 'system'"))
     return engine

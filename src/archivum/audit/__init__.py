@@ -11,7 +11,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.engine import Connection
 
-from archivum.db.tables import AUDIT_ACTIONS, audit_events
+from archivum.db.tables import AUDIT_ACTIONS, AUDIT_TARGET_TYPES, audit_events
 
 
 def record_event(
@@ -21,12 +21,15 @@ def record_event(
     action: str,
     target_id: uuid.UUID,
     details: dict,
+    target_type: str = "entry",
 ) -> None:
     if action not in AUDIT_ACTIONS:
         raise ValueError(f"unknown audit action: {action}")
+    if target_type not in AUDIT_TARGET_TYPES:
+        raise ValueError(f"unknown audit target type: {target_type}")
     conn.execute(
         audit_events.insert().values(
-            actor_id=actor_id, action=action, target_type="entry", target_id=target_id,
+            actor_id=actor_id, action=action, target_type=target_type, target_id=target_id,
             details=details,
         )
     )
