@@ -12,8 +12,10 @@ from pathlib import Path
 
 from archivum.content import LocalFilesystemContentStore
 from archivum.db import create_db_engine
+from archivum.db.tables import FIELD_TYPES, VALUE_ORIGINS
 from archivum.domain import DomainError
 from archivum.identity import ensure_user_principal
+from archivum.metadata import MetadataService
 from archivum.repository import RepositoryService
 
 
@@ -80,11 +82,46 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--note", help="change note (default: 'restored from version N')")
     p.add_argument("--expect", type=int, help="expected current version (optimistic concurrency)")
 
+    schema_p = sub.add_parser("schema", help="metadata schema management")
+    schema_sub = schema_p.add_subparsers(dest="schema_command", required=True)
+    p = schema_sub.add_parser("create", help="create a draft schema")
+    p.add_argument("name")
+    p.add_argument("--description")
+    p = schema_sub.add_parser("field-add", help="add a field to a draft schema")
+    p.add_argument("schema")
+    p.add_argument("key")
+    p.add_argument("type", choices=FIELD_TYPES)
+    p.add_argument("--label")
+    p.add_argument("--required", action="store_true")
+    p = schema_sub.add_parser("publish", help="publish a draft schema (freezes structure)")
+    p.add_argument("schema")
+    p = schema_sub.add_parser("show", help="show a schema and its fields")
+    p.add_argument("schema")
+
+    meta_p = sub.add_parser("metadata", help="document metadata")
+    meta_sub = meta_p.add_subparsers(dest="metadata_command", required=True)
+    p = meta_sub.add_parser("assign", help="assign an active schema to a document")
+    p.add_argument("path")
+    p.add_argument("schema")
+    p = meta_sub.add_parser("set", help="set a metadata value")
+    p.add_argument("path")
+    p.add_argument("key")
+    p.add_argument("value")
+    p.add_argument("--origin", choices=VALUE_ORIGINS, default="manual")
+    p.add_argument("--source")
+    p.add_argument("--confidence")
+    p = meta_sub.add_parser("verify", help="verify a metadata value as a human")
+    p.add_argument("path")
+    p.add_argument("key")
+    p = meta_sub.add_parser("show", help="show a document's metadata")
+    p.add_argument("path")
+
     args = parser.parse_args(argv)
 
     engine = create_db_engine()
     store = LocalFilesystemContentStore(Path(os.environ.get("ARCHIVUM_STORE_ROOT", "blobs")))
     svc = RepositoryService(engine, store)
+    msvc = MetadataService(engine)
     actor = ensure_user_principal(
         engine, os.environ.get("ARCHIVUM_ACTOR") or getpass.getuser()
     )
@@ -174,6 +211,69 @@ def main(argv: list[str] | None = None) -> int:
                 f"restored version {args.version_number} as version "
                 f"{result['version_number']} ({result['version_id']})"
             )
+
+        elif args.command == "schema":
+            if args.schema_command == "create":
+                schema_id = msvc.create_schema(actor, args.name, description=args.description)
+                print(f"created draft schema {args.name!r} ({schema_id})")
+            elif args.schema_command == "field-add":
+                field_id = msvc.add_field(
+                    actor,
+                    args.schema,
+                    args.key,
+                    args.type,
+                    label=args.label,
+                    required=args.required,
+                )
+                print(f"added field {args.key} ({args.type}) to {args.schema!r} ({field_id})")
+            elif args.schema_command == "publish":
+                msvc.publish_schema(actor, args.schema)
+                print(f"published schema {args.schema!r} (structure frozen)")
+            elif args.schema_command == "show":
+                info = msvc.get_schema(args.schema)
+                print(f"schema: {info['name']} ({info['state']}) {info['id']}")
+                if info["description"]:
+                    print(f"description: {info['description']}")
+                for f in info["fields"]:
+                    req = " required" if f["required"] else ""
+                    print(f"  {f['key']} ({f['field_type']}{req}) \"{f['label']}\"")
+
+        elif args.command == "metadata":
+            if args.metadata_command == "assign":
+                msvc.assign_schema(actor, svc.resolve_path(args.path), args.schema)
+                print(f"assigned schema {args.schema!r}")
+            elif args.metadata_command == "set":
+                result = msvc.set_metadata_value(
+                    actor,
+                    svc.resolve_path(args.path),
+                    args.key,
+                    args.value,
+                    origin=args.origin,
+                    source=args.source,
+                    confidence=args.confidence,
+                )
+                verb = "replaced" if result["replaced"] else "set"
+                print(f"{verb} {args.key} ({result['value_id']})")
+            elif args.metadata_command == "verify":
+                msvc.verify_metadata_value(actor, svc.resolve_path(args.path), args.key)
+                print(f"verified {args.key}")
+            elif args.metadata_command == "show":
+                info = msvc.get_metadata(svc.resolve_path(args.path))
+                if info["schema"] is None:
+                    print("no metadata schema assigned")
+                else:
+                    print(f"schema: {info['schema']['name']} ({info['schema']['state']})")
+                    for v in info["values"]:
+                        conf = v["confidence"] if v["confidence"] is not None else "-"
+                        verified = "yes" if v["verified_at"] is not None else "no"
+                        src = v["source"] or "-"
+                        print(
+                            f"{v['key']}: {v['value']} (origin={v['origin']} "
+                            f"confidence={conf} verified={verified} source={src})"
+                        )
+                    if info["missing_required"]:
+                        print(f"missing required: {', '.join(info['missing_required'])}")
+                    print(f"complete: {'yes' if info['complete'] else 'no'}")
 
     except DomainError as exc:
         print(f"error: {exc}", file=sys.stderr)

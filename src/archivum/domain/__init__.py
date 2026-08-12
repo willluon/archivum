@@ -54,6 +54,43 @@ class VersionNotFound(DomainError):
     pass
 
 
+class SchemaNotFound(DomainError):
+    pass
+
+
+class DuplicateSchemaName(DomainError):
+    pass
+
+
+class SchemaStateError(DomainError):
+    """Operation not allowed in the schema's current lifecycle state
+    (draft/active/retired — ADR-0009)."""
+
+
+class SchemaAssignmentError(DomainError):
+    pass
+
+
+class FieldNotFound(DomainError):
+    pass
+
+
+class DuplicateFieldKey(DomainError):
+    pass
+
+
+class InvalidFieldKey(DomainError):
+    pass
+
+
+class InvalidMetadataValue(DomainError):
+    pass
+
+
+class MetadataNotAssigned(DomainError):
+    pass
+
+
 class VersionConflict(DomainError):
     """Optimistic-concurrency failure: the document's current version is no
     longer the one the writer last saw (ADR-0007)."""
