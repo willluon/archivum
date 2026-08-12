@@ -4,13 +4,17 @@ A portfolio-scale **Enterprise Content Management (ECM) platform** — a documen
 repository with durable document identity, content-addressed storage, dynamic
 metadata schemas, versioning, audit, search, and asynchronous processing.
 
-**Status: V0.1 — repository kernel.** Documents have permanent UUID identity
-that provably survives rename and move; bytes live in a content-addressed
-`ContentStore` behind blob-first write ordering; every mutation writes an
-append-only audit event in the same transaction. Exercised by an invariant
-test suite and the `archivum` CLI (`mkdir` / `ingest` / `ls` / `info` /
-`rename` / `mv` / `audit` / `verify`); `scripts/demo.sh` walks the whole
-kernel end to end in CI. Next: versioning (see [`docs/roadmap.md`](docs/roadmap.md)).
+**Status: V0.2 — versioning.** Documents have permanent UUID identity that
+provably survives rename, move, and any number of new versions; bytes live
+in a content-addressed `ContentStore` behind blob-first write ordering;
+every mutation writes an append-only audit event in the same transaction.
+Version history is append-only — restore creates a new version referencing
+the historical blob (ADR-0007) — with optimistic concurrency via
+`expected_version`. Exercised by an invariant test suite and the `archivum`
+CLI (`mkdir` / `ingest` / `ls` / `info` / `rename` / `mv` / `versions` /
+`version-add` / `restore` / `audit` / `verify`); `scripts/demo.sh` walks
+the whole lifecycle in CI. Next: metadata schemas (see
+[`docs/roadmap.md`](docs/roadmap.md)).
 
 ## What this is
 

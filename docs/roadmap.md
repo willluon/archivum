@@ -24,13 +24,16 @@ has an in-transaction audit event; title collisions and cycles are rejected —
 and a scripted CLI walkthrough (ingest → rename → move → fetch by unchanged
 ID → audit trail → hash verify) runs clean.
 
-## V0.2 — Versioning
+## V0.2 — Versioning *(done 2026-08-12)*
 
-v2…vN with an immutable version chain and current-version pointer.
-Optimistic-concurrency hook (`expected_version` parameter) designed into the
-service signatures now, enforced at the API milestone via ETags.
+v2…vN with an immutable version chain and current-version pointer; restore
+creates a new version rather than rewinding the pointer, and current always
+points at the highest version number (ADR-0007). Optimistic concurrency via
+`expected_version` (checked under the documents-row lock; maps to ETags at
+the API milestone). Version deletion deferred to V0.9.
 **Done when:** creating vN+1 provably never mutates vN; version history is
-listable; hash verification works per version.
+listable; hash verification works per version; racing writers from the same
+expected version yield one success and one conflict.
 
 ## V0.3 — Metadata schemas
 

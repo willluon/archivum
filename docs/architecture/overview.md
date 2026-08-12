@@ -74,7 +74,11 @@ content references and hashes, never physical paths in API responses.
 - **Document** — Entry satellite: current-version pointer, document type.
   Invariant: ID survives everything except purge.
 - **DocumentVersion** — immutable: number (monotonic per document), blob
-  reference, MIME, size, creator, timestamp, change note.
+  reference, MIME, size, creator, timestamp, change note. History is
+  append-only: restore creates a new version referencing the source
+  version's blob, and the current pointer always sits at the highest
+  number — which is what makes `expected_version` (→ HTTP ETags) a sound
+  concurrency token (ADR-0007).
 - **Blob** — content identity: SHA-256 (unique), size, storage key. Two
   documents may share one blob.
 - **MetadataSchema / MetadataFieldDefinition** — document types as data,
